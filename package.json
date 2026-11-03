@@ -1,0 +1,26 @@
+{
+  "name": "noteshare",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:web": "npm run dev -w @noteshare/web",
+    "dev:api": "npm run dev -w @noteshare/api",
+    "build": "npm run build -w @noteshare/shared && npm run build -w @noteshare/api && npm run build -w @noteshare/web",
+    "lint": "npm run lint --workspaces --if-present",
+    "build:extension": "npm run build -w @noteshare/extension"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "devDependencies": {
+    "tsx": "^4.21.0",
+    "typescript": "~5.8.2"
+  },
+  "description": "Open-source collaborative notes app: notes, Kanban, calendar, map, sharing, chat, MCP integration and browser extension.",
+  "license": "MIT"
+}

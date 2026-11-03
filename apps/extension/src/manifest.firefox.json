@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "Noteshare",
+  "version": "0.1.0",
+  "description": "Noteshare en un panel lateral: anot\u00e1 sin salir de la pesta\u00f1a en la que est\u00e1s.",
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "noteshare@example.invalid",
+      "strict_min_version": "121.0"
+    }
+  },
+  "permissions": [
+    "identity",
+    "storage",
+    "notifications",
+    "alarms"
+  ],
+  "host_permissions": [
+    "__HOST_PERMISSIONS__"
+  ],
+  "background": {
+    "scripts": [
+      "background.js"
+    ],
+    "type": "module"
+  },
+  "sidebar_action": {
+    "default_title": "Noteshare",
+    "default_panel": "panel.html",
+    "default_icon": "icons/48.png"
+  }
+}

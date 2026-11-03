@@ -1,0 +1,109 @@
+@import "tailwindcss";
+@import "leaflet/dist/leaflet.css";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --breakpoint-xs: 480px;
+}
+
+body {
+  @apply bg-stone-50 text-stone-900 transition-colors duration-300;
+}
+
+.dark body {
+  @apply bg-stone-950 text-stone-100;
+}
+
+/* @layer components (not a bare rule) so Tailwind v4's cascade layers put
+   these before the utilities layer regardless of where in the source this
+   file sits relative to `@import "tailwindcss"` — otherwise a plain rule
+   here can out-cascade a same-specificity utility that's meant to override
+   it (e.g. `p-0` losing to .btn-primary's `px-4 py-2`, which was silently
+   eating 100% of a small square icon button's width down to 0 — found via
+   a genuinely invisible send icon on a 32px recording-panel button; the
+   same class combo elsewhere just made icons a bit smaller, unnoticed). */
+@layer components {
+  .glass {
+    @apply bg-white/80 backdrop-blur-md border border-white/20 shadow-sm;
+  }
+
+  .dark .glass {
+    @apply bg-stone-900/80 border-white/10;
+  }
+
+  .btn-primary {
+    @apply px-4 py-2 bg-emerald-600 text-white rounded-lg hover:bg-emerald-700 transition-colors disabled:opacity-50;
+  }
+
+  .btn-secondary {
+    @apply px-4 py-2 bg-stone-200 text-stone-700 rounded-lg hover:bg-stone-300 transition-colors;
+  }
+
+  .dark .btn-secondary {
+    @apply bg-stone-800 text-stone-300 hover:bg-stone-700;
+  }
+
+  .card {
+    @apply bg-white p-4 rounded-xl border border-stone-200 shadow-sm hover:shadow-md transition-shadow;
+  }
+
+  .dark .card {
+    @apply bg-stone-900 border-stone-800 text-stone-100;
+  }
+}
+
+/* Selected geotagged note marker on the map */
+.selected-map-marker {
+  background: transparent;
+  border: none;
+}
+.selected-map-marker .pin {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 34px;
+  height: 34px;
+  margin-left: -17px;
+  margin-top: -34px;
+  color: #f59e0b;
+  filter: drop-shadow(0 3px 4px rgba(0, 0, 0, 0.35));
+}
+.selected-map-marker .halo {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 24px;
+  height: 24px;
+  margin-left: -12px;
+  margin-top: -12px;
+  border-radius: 9999px;
+  background: rgba(245, 158, 11, 0.45);
+  animation: map-marker-pulse 1.6s ease-out infinite;
+}
+@keyframes map-marker-pulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.9;
+  }
+  100% {
+    transform: scale(3.2);
+    opacity: 0;
+  }
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d1d5db;
+  border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #9ca3af;
+}

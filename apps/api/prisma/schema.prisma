@@ -1,0 +1,376 @@
+// Noteshare — Postgres schema (Prisma).
+// The optional `firebaseId` columns are legacy (kept so existing databases and
+// migrations stay compatible); new installs can ignore them.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Emails are always stored lowercased by the app layer (matches the old
+// client code, which normalised with .toLowerCase() before every write).
+
+enum MemoType {
+  note
+  list
+}
+
+enum RequestStatus {
+  pending
+  accepted
+  rejected
+  blocked
+}
+
+model User {
+  id                    String   @id @default(uuid())
+  // Old Firebase Auth localId — kept so a re-sync at cutover can re-map rows.
+  firebaseId            String?  @unique
+  // Google's `sub` (providerUserInfo[].rawId): stable & global per Google
+  // account, identical across OAuth clients. This is the login key.
+  googleSub             String   @unique
+  email                 String   @unique
+  // Unique handle, lowercase [a-z0-9_]{3,20}. Nullable — existing users are
+  // backfilled by scripts/backfill-usernames.ts, new ones set one in Settings.
+  username              String?  @unique
+  displayName           String   @default("")
+  photoURL              String   @default("")
+  // Bumped on SSE connect/disconnect — "last seen" in chat. "Online" itself
+  // is not stored; it's derived live from lib/sse.ts's active-connection map.
+  lastSeenAt            DateTime @default(now())
+  // Emails the user has shared with before (suggestions). Array for parity
+  // with the old users/{uid}.frequentCollaborators field.
+  frequentCollaborators String[] @default([])
+  // Custom Kanban columns: [{ id, label }, ...]. null → the app's translated
+  // defaults (pending / in-progress / completed).
+  kanbanColumns         Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  memos            Memo[]
+  folders          Folder[]
+  collaboratorIn   MemoCollaborator[]
+  apiTokens        ApiToken[]
+  notifications    Notification[]
+  contacts         Contact[]                 @relation("ContactOwner")
+  contactOf        Contact[]                 @relation("ContactUser")
+  comments         MemoComment[]
+  commentReads     MemoCommentRead[]
+  conversations    ConversationParticipant[]
+  sentMessages     DirectMessage[]
+  messageReactions MessageReaction[]
+}
+
+// A private address book. Each row is "person X is in Y's contacts" — one
+// direction only, no mutual consent. Seeded automatically from sharing
+// activity (see lib/contacts.ts) and editable by hand. `email` is the stable
+// key; `contactUserId` is filled in lazily once that person has an account.
+model Contact {
+  id      String @id @default(uuid())
+  ownerId String
+  owner   User   @relation("ContactOwner", fields: [ownerId], references: [id], onDelete: Cascade)
+
+  email         String // lowercased by the app layer
+  contactUserId String?
+  contactUser   User?   @relation("ContactUser", fields: [contactUserId], references: [id], onDelete: SetNull)
+
+  // Owner-set nickname; falls back to the contact's displayName / email.
+  alias    String?
+  favorite Boolean @default(false)
+  // How it got here: "manual" | "shared-out" | "shared-in" | "joined"
+  source   String  @default("manual")
+
+  createdAt DateTime @default(now())
+
+  @@unique([ownerId, email])
+  @@index([ownerId])
+  @@index([contactUserId])
+}
+
+// In-app notifications: a note was shared with the user, or a shared note the
+// user has access to was updated by someone else. Memo title / actor name are
+// denormalised so the row survives the memo being deleted or access removed.
+model Notification {
+  id             String   @id @default(uuid())
+  userId         String
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type           String // "memo.shared" | "memo.updated" | "memo.joined" | "memo.comment" | "dm.message"
+  memoId         String?
+  memoTitle      String   @default("")
+  // Set for "dm.message" — the conversation to open when the row is clicked.
+  conversationId String?
+  actorId        String?
+  actorName      String   @default("")
+  read           Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  @@index([userId, read])
+  @@index([userId, createdAt])
+}
+
+model Folder {
+  id         String   @id @default(uuid())
+  firebaseId String?  @unique
+  name       String
+  ownerId    String
+  owner      User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  createdAt  DateTime @default(now())
+
+  memos Memo[]
+
+  @@index([ownerId])
+}
+
+model Memo {
+  id         String  @id @default(uuid())
+  firebaseId String? @unique
+
+  title          String
+  content        String    @default("")
+  type           MemoType  @default(note)
+  color          String    @default("#ffffff")
+  tags           String[]  @default([])
+  // "pending" | "in-progress" | "completed" — kept as text (not an enum) to
+  // preserve the exact Firestore values, hyphen included.
+  kanbanStatus   String    @default("pending")
+  // { "pending": 1712345678901, ... } — epoch millis per status transition.
+  kanbanTimeLogs Json      @default("{}")
+  dueDate        DateTime?
+  // { lat, lng, name }
+  location       Json?
+
+  folderId String?
+  folder   Folder? @relation(fields: [folderId], references: [id], onDelete: SetNull)
+
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  // Sharing config — lived inline on the Firestore doc, stays inline here.
+  shareCode     String?  @unique
+  shareName     String?
+  allowAnyone   Boolean  @default(false)
+  allowedEmails String[] @default([]) // citext-ish; compared lowercased in app
+  isPublic      Boolean  @default(false)
+  publicSlug    String?  @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @default(now())
+
+  images         MemoImage[]
+  collaborators  MemoCollaborator[]
+  comments       MemoComment[]
+  directMessages DirectMessage[]
+
+  @@index([ownerId])
+  @@index([folderId])
+  @@index([isPublic])
+}
+
+model MemoImage {
+  id        String   @id @default(uuid())
+  memoId    String
+  memo      Memo     @relation(fields: [memoId], references: [id], onDelete: Cascade)
+  url       String // "/uploads/<uuid>.webp"
+  position  Int      @default(0) // 0 == the legacy `imageUrl`
+  width     Int?
+  height    Int?
+  bytes     Int?
+  createdAt DateTime @default(now())
+
+  @@index([memoId])
+}
+
+// Replaces the old `collaborators[]` array (which mixed UIDs and emails).
+model MemoCollaborator {
+  id        String   @id @default(uuid())
+  memoId    String
+  memo      Memo     @relation(fields: [memoId], references: [id], onDelete: Cascade)
+  // Resolved collaborator (joined via share code / accepted invite).
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // Invited by email but no account (yet).
+  email     String?
+  createdAt DateTime @default(now())
+
+  @@unique([memoId, userId])
+  @@unique([memoId, email])
+  @@index([memoId])
+  @@index([userId])
+}
+
+// The old `requests` collection (0 docs at export time, kept for completeness).
+model CollaborationRequest {
+  id         String        @id @default(uuid())
+  firebaseId String?       @unique
+  memoId     String
+  fromUserId String?
+  fromEmail  String
+  toEmail    String
+  status     RequestStatus @default(pending)
+  createdAt  DateTime      @default(now())
+
+  @@index([toEmail])
+  @@index([memoId])
+}
+
+// Personal access tokens for the MCP server (Bearer auth).
+model ApiToken {
+  id         String    @id @default(uuid())
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  name       String
+  tokenHash  String    @unique // sha256 hex of the opaque token
+  lastUsedAt DateTime?
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}
+
+// --- Chat ------------------------------------------------------------------
+
+// A conversation thread attached to a single note. Everyone who can read the
+// note can read and post; deleting the note removes the thread.
+model MemoComment {
+  id        String    @id @default(uuid())
+  memoId    String
+  memo      Memo      @relation(fields: [memoId], references: [id], onDelete: Cascade)
+  authorId  String
+  author    User      @relation(fields: [authorId], references: [id], onDelete: Cascade)
+  body      String
+  createdAt DateTime  @default(now())
+  editedAt  DateTime?
+
+  @@index([memoId, createdAt])
+}
+
+// Per-user "I have read the thread up to here" marker, for unread badges.
+model MemoCommentRead {
+  memoId     String
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt DateTime @default(now())
+
+  @@id([memoId, userId])
+  @@index([userId])
+}
+
+// A 1:1 direct-message thread. `pairKey` is the two user ids sorted and joined
+// with ":" so there is exactly one conversation per pair.
+model Conversation {
+  id            String   @id @default(uuid())
+  // Sorted "userA:userB" for a 1:1 (the lookup key for POST /with); a random
+  // uuid for a group, where it's just a DB-uniqueness anchor with no meaning.
+  pairKey       String   @unique
+  createdAt     DateTime @default(now())
+  lastMessageAt DateTime @default(now())
+
+  isGroup    Boolean @default(false)
+  groupName  String?
+  groupPhoto String?
+  // Who created the group. Informational only — admin status (and the
+  // permissions that come with it) lives on ConversationParticipant.isAdmin,
+  // since a group can have N admins. No relation (unenforced) so removing a
+  // user doesn't need special-case cleanup here; null for a 1:1.
+  ownerId    String?
+
+  participants ConversationParticipant[]
+  messages     DirectMessage[]
+
+  @@index([lastMessageAt])
+  @@index([ownerId])
+}
+
+model ConversationParticipant {
+  conversationId  String
+  conversation    Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  userId          String
+  user            User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  lastReadAt      DateTime     @default(now())
+  // Bumped when this participant fetches the thread — "delivered" for
+  // whatever the other side had sent by then. WhatsApp-style tick status is
+  // derived by comparing a message's createdAt against the OTHER
+  // participant's lastDeliveredAt/lastReadAt.
+  lastDeliveredAt DateTime     @default(now())
+  // A group can have any number of admins — promoting someone is additive,
+  // never a transfer that revokes the promoter's own admin status. Ignored
+  // for a 1:1 (isGroup: false).
+  isAdmin         Boolean      @default(false)
+
+  @@id([conversationId, userId])
+  @@index([userId])
+}
+
+model DirectMessage {
+  id             String       @id @default(uuid())
+  conversationId String
+  conversation   Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  senderId       String
+  sender         User         @relation(fields: [senderId], references: [id], onDelete: Cascade)
+  body           String
+  // Set when the message is a shared note (forwarded or created-and-sent).
+  // The note itself is shared with the recipient at send time.
+  memoId         String?
+  memo           Memo?        @relation(fields: [memoId], references: [id], onDelete: SetNull)
+  // Pasted/attached photos — "/uploads/<uuid>.webp" paths, same pipeline as
+  // note images.
+  images         String[]     @default([])
+  // A sticker sent via the sticker picker — reuses the same image pipeline
+  // and `images` array (always exactly one entry, no body) as a real photo,
+  // so this is the only way to tell them apart, e.g. to exclude stickers
+  // from the "shared photos" gallery.
+  isSticker      Boolean      @default(false)
+  createdAt      DateTime     @default(now())
+
+  // A voice message — "/uploads/<uuid>.<ext>" path through a raw-save
+  // sibling of the image pipeline (no webp re-encode). audioDurationSec is
+  // captured client-side at record time (decoding on the server just to get
+  // duration isn't worth it) and is purely informational for the player UI.
+  audioUrl         String?
+  audioDurationSec Int?
+
+  // Null for a top-level message. Self-relation, so quoting a message that
+  // itself quotes another is fine — only one level is rendered/shown, WhatsApp-style.
+  replyToId String?
+  replyTo   DirectMessage?  @relation("MessageReplies", fields: [replyToId], references: [id], onDelete: SetNull)
+  replies   DirectMessage[] @relation("MessageReplies")
+
+  // Set when the sender edits body/images after sending. Null = never edited.
+  editedAt DateTime?
+
+  // "Delete for everyone": replaces the message with a placeholder for all
+  // participants once set. Distinct from deletedFor below (WhatsApp has both).
+  deletedAt  DateTime?
+  // "Delete for me": userIds who hid this message just for themselves — the
+  // message is otherwise untouched for everyone else. A Postgres array
+  // instead of a join table since membership-per-message is small and this
+  // is only ever filtered on, never joined.
+  deletedFor String[]  @default([])
+
+  reactions MessageReaction[]
+
+  @@index([conversationId, createdAt])
+  @@index([replyToId])
+}
+
+// One reaction per (message, user) — like WhatsApp, reacting again with a
+// different emoji SWAPS your existing one rather than adding a second, so
+// this is an upsert target, not an append-only log.
+model MessageReaction {
+  id        String        @id @default(uuid())
+  messageId String
+  message   DirectMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  userId    String
+  user      User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  // A single emoji grapheme (e.g. "👍"), not a name/shortcode — stored and
+  // rendered as-is, no server-side allowlist of which emoji are valid.
+  emoji     String
+  createdAt DateTime      @default(now())
+
+  @@unique([messageId, userId])
+  @@index([messageId])
+}

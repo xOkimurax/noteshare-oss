@@ -1,0 +1,11 @@
+Sticker artwork in this directory is derived from Twemoji graphics,
+copyright Twitter, Inc and other contributors, licensed under
+CC-BY 4.0: https://creativecommons.org/licenses/by/4.0/
+
+Source: https://github.com/jdecked/twemoji
+Commit: b6b55fef1e8636b540a6d016a4729ca8cdf2e60b (tag v17.0.3)
+
+Each .svg source under assets/svg/<codepoint>.svg was rasterized to a
+512x512 transparent-background .webp with no other modification; the
+sticker filenames here (e.g. thumbs-up.webp, fire.webp) are our own
+descriptive names, not part of the upstream project.
